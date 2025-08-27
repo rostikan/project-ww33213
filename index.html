@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Dino Game Modular</title>
+<style>
+body { margin:0; overflow:hidden; background:#87ceeb; position:relative; }
+#gameContainer { width:100vw; height:100vh; display:flex; justify-content:center; align-items:center; }
+canvas { background:#cceeff; border:2px solid #000; display:block; }
+button {
+  position:absolute; bottom:20px; right:20px;
+  padding:12px 24px; font-size:20px;
+  z-index:1000; cursor:pointer;
+  border:none; border-radius:5px; background:#4CAF50; color:white;
+}
+#restartBtn { display:none; }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+<canvas id="game"></canvas>
+</div>
+<button id="startBtn">START</button>
+<button id="restartBtn">RESTART</button>
+
+<script src="https://telegram.org/js/games.js"></script>
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const startBtn = document.getElementById("startBtn");
+const restartBtn = document.getElementById("restartBtn");
+
+const FIELD_WIDTH = 1200;
+const FIELD_HEIGHT = 400;
+canvas.width = FIELD_WIDTH;
+canvas.height = FIELD_HEIGHT;
+
+// Масштабирование через CSS
+function scaleCanvas() {
+    const container = document.getElementById("gameContainer");
+    const scaleX = container.clientWidth / FIELD_WIDTH;
+    const scaleY = container.clientHeight / FIELD_HEIGHT;
+    const scale = Math.min(scaleX, scaleY);
+    canvas.style.width = FIELD_WIDTH * scale + 'px';
+    canvas.style.height = FIELD_HEIGHT * scale + 'px';
+}
+window.addEventListener("resize", scaleCanvas);
+scaleCanvas();
+
+// ====== МОДУЛЬ: Стены и блоки ======
+const WALL_TYPES = [
+    { w: 20, h: 60 },
+    { w: 20, h: 20 }
+];
+
+function createWall(typeIndex, xPosition) {
+    const type = WALL_TYPES[typeIndex];
+    return { x: xPosition, y: FIELD_HEIGHT - type.h - 20, w: type.w, h: type.h };
+}
+
+function createBlock(startX, wallIndices) {
+    let walls = [];
+    let x = startX;
+    for(let i=0;i<wallIndices.length;i++){
+        const wall = createWall(wallIndices[i], x);
+        walls.push(wall);
+        x += wall.w*0.5; // дистанция половина ширины
+    }
+    return walls;
+}
+
+// ====== Игровые объекты ======
+let dino, clouds, obstacles;
+let gameStarted = false;
+let gameOver = false;
+let score = 0;
+let gameSpeed = 3;
+let lastFrameTime = 0;
+
+// Инициализация игры
+function initGame(){
+    dino = { x:60, y:FIELD_HEIGHT-60, w:40, h:40, vy:0, jumping:false };
+    clouds = [];
+    obstacles = [];
+    score=0;
+    gameSpeed=3;
+    gameOver=false;
+
+    for(let i=0;i<5;i++){
+        clouds.push({ x: Math.random()*FIELD_WIDTH, y: Math.random()*FIELD_HEIGHT*0.3, w: FIELD_HEIGHT*0.1, h: FIELD_HEIGHT*0.05, speed: Math.random()*0.5+0.2 });
+    }
+}
+
+// ====== Прыжок динозавра ======
+const JUMP_HEIGHT = 120; // фиксированная высота прыжка
+const GRAVITY = 0.6;     // скорость падения
+
+function jump(){
+    if(!dino.jumping){
+        // фиксированная начальная скорость для достижения JUMP_HEIGHT
+        dino.vy = -Math.sqrt(2 * GRAVITY * JUMP_HEIGHT);
+        dino.jumping = true;
+    }
+}
+
+// В функции update заменяем динамическую гравитацию на фиксированную
+function update(delta){
+    if(!gameStarted || gameOver) return;
+
+    // Обновление позиции динозавра
+    dino.y += dino.vy * delta;
+    dino.vy += GRAVITY * delta; // гравитация статична
+
+    if(dino.y >= FIELD_HEIGHT - dino.h - 20){
+        dino.y = FIELD_HEIGHT - dino.h - 20;
+        dino.jumping = false;
+    }
+}
+
+// ====== Менеджер блоков на экране ======
+function generateBlocks(){
+    if(obstacles.length===0 || FIELD_WIDTH - (obstacles[obstacles.length-1].x + obstacles[obstacles.length-1].w) < 200){
+        let stage = 1;
+        if(score>5000) stage=3;
+        else if(score>2000) stage=2;
+
+        let blocksToAdd = 1;
+        if(stage===2) blocksToAdd=2;
+        else if(stage===3) blocksToAdd=2;
+
+        for(let b=0;b<blocksToAdd;b++){
+            let wallIndices = [];
+            if(stage===1 || stage===2) wallIndices=[Math.floor(Math.random()*WALL_TYPES.length)];
+            if(stage===3){
+                const count = Math.floor(Math.random()*2)+2; // 2-3 стены
+                for(let i=0;i<count;i++){
+                    wallIndices.push(Math.floor(Math.random()*WALL_TYPES.length));
+                }
+            }
+            const startX = obstacles.length ? obstacles[obstacles.length-1].x + obstacles[obstacles.length-1].w + 200 : FIELD_WIDTH;
+            const blockWalls = createBlock(startX, wallIndices);
+            obstacles.push(...blockWalls);
+        }
+    }
+}
+
+// ====== Обновление ======
+function update(delta){
+    if(!gameStarted || gameOver) return;
+
+    dino.y += dino.vy*delta;
+    dino.vy += 0.6*delta;
+    if(dino.y >= FIELD_HEIGHT - dino.h - 20){
+        dino.y = FIELD_HEIGHT - dino.h - 20;
+        dino.jumping=false;
+    }
+
+    generateBlocks();
+    obstacles.forEach(o=>o.x -= gameSpeed*delta);
+    obstacles = obstacles.filter(o=>o.x+o.w>0);
+
+    // коллизии
+    for(const o of obstacles){
+        if(dino.x<o.x+o.w && dino.x+dino.w>o.x &&
+           dino.y<o.y+o.h && dino.y+dino.h>o.y){
+            endGame();
+        }
+    }
+
+    clouds.forEach(c=>{ c.x -= c.speed*delta; if(c.x+c.w<0)c.x=FIELD_WIDTH; });
+
+    score++;
+    gameSpeed += 0.002*delta;
+}
+
+// ====== Рисование ======
+function draw(){
+    ctx.clearRect(0,0,FIELD_WIDTH,FIELD_HEIGHT);
+    ctx.fillStyle="#cceeff"; ctx.fillRect(0,0,FIELD_WIDTH,FIELD_HEIGHT);
+    ctx.strokeStyle="#000"; ctx.lineWidth=2; ctx.strokeRect(0,0,FIELD_WIDTH,FIELD_HEIGHT);
+    ctx.fillStyle="white"; clouds.forEach(c=>ctx.fillRect(c.x,c.y,c.w,c.h));
+    ctx.fillStyle="#654321"; ctx.fillRect(0,FIELD_HEIGHT-20,FIELD_WIDTH,20);
+    ctx.fillStyle="green"; ctx.fillRect(dino.x,dino.y,dino.w,dino.h);
+    ctx.fillStyle="red"; obstacles.forEach(o=>ctx.fillRect(o.x,o.y,o.w,o.h));
+    ctx.fillStyle="black"; ctx.font="20px Arial"; ctx.fillText("Score: "+score,20,30);
+    if(gameOver){ ctx.fillStyle="black"; ctx.font="30px Arial"; ctx.fillText("Game Over! Score: "+score,FIELD_WIDTH/2 - 120,FIELD_HEIGHT/2); }
+}
+
+// ====== Игровой цикл ======
+function loop(timestamp){
+    const delta = (timestamp-lastFrameTime)/16.67;
+    lastFrameTime=timestamp;
+
+    update(delta);
+    draw();
+    if(!gameOver) requestAnimationFrame(loop);
+}
+
+// ====== Конец игры ======
+function endGame(){
+    gameOver=true;
+    restartBtn.style.display="block";
+    try{ if(window.TelegramGameProxy) TelegramGameProxy.sendGameScore(score,true); } catch(e){ console.error(e); }
+}
+
+// ====== События ======
+startBtn.addEventListener("click", ()=>{
+    startBtn.style.display="none";
+    gameStarted=true;
+    initGame();
+    lastFrameTime=performance.now();
+    loop(lastFrameTime);
+});
+restartBtn.addEventListener("click", ()=>{
+    restartBtn.style.display="none";
+    initGame();
+    lastFrameTime=performance.now();
+    loop(lastFrameTime);
+});
+window.addEventListener("keydown", e=>{ if(e.code==="Space") jump(); });
+window.addEventListener("touchstart", ()=>jump());
+
+</script>
+</body>
+</html>
