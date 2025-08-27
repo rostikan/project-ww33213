@@ -5,7 +5,7 @@
 <title>Dino Game</title>
 <style>
 body { margin:0; overflow:hidden; background:#cceeff; position:relative; }
-canvas { display:block; margin:auto; background:#cceeff; border:2px solid #000; touch-action:none; }
+canvas { display:block; margin:auto; touch-action:none; }
 #startBtn {
   position:absolute; bottom:20px; right:20px;
   padding:12px 24px; font-size:20px;
@@ -19,30 +19,38 @@ canvas { display:block; margin:auto; background:#cceeff; border:2px solid #000; 
 <button id="startBtn">START</button>
 
 <script src="https://telegram.org/js/games.js"></script>
-
 <script>
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const startBtn = document.getElementById("startBtn");
 let gameStarted = false;
+let gameOver = false;
+let score = 0;
+let gameSpeed = 3; // ускорено на 50%
 
-// Фиксированное игровое поле
+// Фиксированное поле
 const FIELD_WIDTH = 1200;
 const FIELD_HEIGHT = 400;
 
+// Масштабирование canvas под экран
 canvas.width = FIELD_WIDTH;
 canvas.height = FIELD_HEIGHT;
+function scaleCanvas(){
+    let scaleX = window.innerWidth / FIELD_WIDTH;
+    let scaleY = window.innerHeight / FIELD_HEIGHT;
+    let scale = Math.min(scaleX, scaleY);
+    canvas.style.transform = `scale(${scale})`;
+    canvas.style.transformOrigin = "top left";
+}
+window.addEventListener("resize", scaleCanvas);
+scaleCanvas();
 
 // Игровые объекты
 let dino = { x:60, y:FIELD_HEIGHT-80, w:40, h:40, vy:0, jumping:false };
 let obstacles = [];
 let clouds = [];
-let score = 0;
-let gameOver = false;
-let gameSpeed = 3; // ускорено на 50%
-let frame = 0;
 
-// Настройка облаков
+// Создание облаков
 for(let i=0;i<5;i++){
     clouds.push({
         x: Math.random()*FIELD_WIDTH,
@@ -56,52 +64,50 @@ for(let i=0;i<5;i++){
 // Прыжок
 function jump(){
     if(!dino.jumping){
-        dino.vy = -18; // прыжок масштабирован под поле
+        dino.vy = -18;
         dino.jumping = true;
     }
 }
-
-// Старт
-startBtn.addEventListener("click", () => { startBtn.style.display="none"; gameStarted=true; });
+startBtn.addEventListener("click", ()=>{ startBtn.style.display="none"; gameStarted=true; });
 
 // Генерация препятствий
-function createObstacle(){
-    // Типы препятствий
-    const types = [
-        { w:30, h:60 },  // обычный
-        { w:40, h:40 },  // низкий
-        { w:20, h:80 },  // высокий
-        { w:50, h:50 }   // широкий
-    ];
+function generateObstacles(){
+    const maxObstacles = 4;
+    while(obstacles.length < maxObstacles){
+        let last = obstacles[obstacles.length-1];
+        let minGap = dino.w*2 + Math.random()*dino.w*2; // расстояние < длины прыжка
+        let newX = last ? last.x + last.w + minGap : FIELD_WIDTH;
 
-    let type = types[Math.floor(Math.random()*types.length)];
+        let types = [
+            { w:30, h:60 },  // обычный
+            { w:40, h:40 },  // низкий
+            { w:20, h:80 },  // высокий
+            { w:50, h:50 }   // широкий
+        ];
+        let type = types[Math.floor(Math.random()*types.length)];
 
-    obstacles.push({
-        x: FIELD_WIDTH,
-        y: FIELD_HEIGHT - type.h - 20,
-        w: type.w,
-        h: type.h
-    });
+        obstacles.push({
+            x: newX,
+            y: FIELD_HEIGHT - type.h - 20,
+            w: type.w,
+            h: type.h
+        });
+    }
 }
 
-// Обновление
-function update(){
+// Основное обновление с delta time
+let lastTime = 0;
+function update(delta){
     if(!gameStarted || gameOver) return;
 
     // Динозавр
-    dino.y += dino.vy;
-    dino.vy += 0.6;
+    dino.y += dino.vy * delta;
+    dino.vy += 0.6 * delta;
     if(dino.y >= FIELD_HEIGHT - dino.h - 20){ dino.y = FIELD_HEIGHT - dino.h - 20; dino.jumping=false; }
 
-    // Генерация препятствий
-    if(obstacles.length < 3){
-        if(obstacles.length === 0 || (FIELD_WIDTH - (obstacles[obstacles.length-1].x + obstacles[obstacles.length-1].w)) < dino.w*4){
-            createObstacle();
-        }
-    }
-
-    // Движение препятствий
-    obstacles.forEach(o => o.x -= gameSpeed);
+    // Препятствия
+    generateObstacles();
+    obstacles.forEach(o => o.x -= gameSpeed * delta);
     obstacles = obstacles.filter(o => o.x + o.w > 0);
 
     // Коллизии
@@ -113,12 +119,11 @@ function update(){
     }
 
     // Облака
-    clouds.forEach(c => { c.x -= c.speed; if(c.x+c.w<0)c.x=FIELD_WIDTH; });
+    clouds.forEach(c => { c.x -= c.speed * delta; if(c.x+c.w<0) c.x=FIELD_WIDTH; });
 
     // Очки и ускорение
     score++;
-    gameSpeed += 0.001;
-    frame++;
+    gameSpeed += 0.001 * delta;
 }
 
 // Рисование
@@ -153,15 +158,34 @@ function draw(){
     }
 }
 
-// Игровой цикл
-function loop(){ update(); draw(); if(!gameOver) requestAnimationFrame(loop); }
-function endGame(){ gameOver=true; if(window.TelegramGameProxy) TelegramGameProxy.postEvent("score",score); }
+// Игровой цикл с delta time
+function loop(timestamp){
+    if(!lastTime) lastTime = timestamp;
+    const delta = (timestamp - lastTime) / 16.67; // нормируем к 60 FPS
+    lastTime = timestamp;
+
+    update(delta);
+    draw();
+    if(!gameOver) requestAnimationFrame(loop);
+}
+loop();
+
+// Конец игры
+function endGame(){
+    gameOver=true;
+    // Отправка очков в Telegram
+    try{
+        if(window.TelegramGameProxy){
+            TelegramGameProxy.sendGameScore(score,true);
+        }
+    } catch(e){
+        console.error("Ошибка отправки очков:", e);
+    }
+}
 
 // Управление
 window.addEventListener("keydown", e=>{ if(e.code==="Space") jump(); });
 window.addEventListener("touchstart", ()=>jump());
-
-loop();
 </script>
 </body>
 </html>
